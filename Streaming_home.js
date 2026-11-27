@@ -52,10 +52,17 @@
     return list;
   }
 
+  var last_error = '';
+
   function request(url, ok, fail) {
-    var full = Lampa.TMDB.api(url + (url.indexOf('?') > -1 ? '&' : '?') + 'language=' + lang());
+    var key = (Lampa.TMDB && typeof Lampa.TMDB.key === 'function') ? Lampa.TMDB.key() : '';
+    var full = Lampa.TMDB.api(url + (url.indexOf('?') > -1 ? '&' : '?') + 'api_key=' + key + '&language=' + lang());
     var net = new Lampa.Reguest();
-    net.silent(full, ok, fail);
+
+    net.silent(full, ok, function (a, b) {
+      last_error = (a && a.status ? a.status : '') + ' ' + (b || '');
+      fail && fail();
+    });
   }
 
   function Streaming(object) {
@@ -76,7 +83,10 @@
         var data = slots.filter(Boolean);
 
         if (data.length) _this.build(data);
-        else _this.empty();
+        else {
+          if (last_error) Lampa.Noty.show('Стриминги: ошибка запроса TMDB (' + last_error.trim() + ')');
+          _this.empty();
+        }
 
         _this.activity.loader(false);
       };

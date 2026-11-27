@@ -45,7 +45,8 @@
       list.push({
         title: s.name + ' — новинки',
         url: 'discover/tv?with_networks=' + s.network + '&sort_by=first_air_date.desc&first_air_date.lte=' + today + '&vote_count.gte=5',
-        type: 'tv'
+        type: 'tv',
+        kind: 'new'
       });
     });
 
@@ -117,6 +118,100 @@
     return comp;
   }
 
+  // ---------- Ряды на главной ----------
+
+  function mainMode() {
+    return Lampa.Storage.get('streaming_main_mode', 'both');
+  }
+
+  function activeOnMain(def) {
+    var mode = mainMode();
+    if (!def || mode == 'off' || def.kind == 'new') return false;
+    return mode == 'both' || (mode == 'series' && def.type == 'tv') || (mode == 'movies' && def.type == 'movie');
+  }
+
+  function makeLine(def, json) {
+    if (!json || !json.results || !json.results.length) return null;
+
+    json.results.forEach(function (card) {
+      if (!card.media_type) card.media_type = def.type;
+    });
+
+    return {
+      title: def.title,
+      results: json.results,
+      url: def.url,
+      source: 'tmdb',
+      page: 1,
+      more: true
+    };
+  }
+
+  function hookMain() {
+    // Новые версии Lampa: официальный API рядов
+    if (Lampa.ContentRows && typeof Lampa.ContentRows.add === 'function') {
+      lines().forEach(function (base, i) {
+        Lampa.ContentRows.add({
+          index: i + 1,
+          name: 'streaming_row_' + i,
+          title: base.title,
+          screen: ['main'],
+          call: function () {
+            var def = lines()[i];
+            if (!activeOnMain(def)) return;
+
+            return function (callback) {
+              request(def.url, function (json) {
+                var line = makeLine(def, json);
+                callback(line || {});
+              }, function () {
+                callback({});
+              });
+            };
+          }
+        });
+      });
+      return;
+    }
+
+    // Старые версии: добавляем ряды в ответ Lampa.Api.sources.tmdb.main
+    var tmdb = Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb;
+    if (!tmdb || typeof tmdb.main !== 'function') return;
+
+    var original = tmdb.main;
+
+    tmdb.main = function (params, oncomplite, onerror) {
+      var added = false;
+
+      return original.call(this, params, function (data) {
+        if (added || !Array.isArray(data)) return oncomplite(data);
+        added = true;
+
+        var defs = lines().filter(activeOnMain);
+        var slots = new Array(defs.length);
+        var left = defs.length;
+
+        if (!left) return oncomplite(data);
+
+        var done = function () {
+          left--;
+          if (left > 0) return;
+          slots.filter(Boolean).forEach(function (line, n) {
+            data.splice(Math.min(1 + n, data.length), 0, line);
+          });
+          oncomplite(data);
+        };
+
+        defs.forEach(function (def, i) {
+          request(def.url, function (json) {
+            slots[i] = makeLine(def, json);
+            done();
+          }, done);
+        });
+      }, onerror);
+    };
+  }
+
   function addMenu() {
     if ($('.menu .menu__list [data-action="streaming_home"]').length) return;
 
@@ -171,6 +266,21 @@
       }
     });
 
+    Lampa.SettingsApi.addParam({
+      component: 'streaming_home',
+      param: {
+        name: 'streaming_main_mode',
+        type: 'select',
+        values: { both: 'Сериалы и фильмы', series: 'Только сериалы', movies: 'Только фильмы', off: 'Не показывать' },
+        default: 'both'
+      },
+      field: {
+        name: 'Подборки на главной',
+        description: 'Какие ряды стримингов показывать на главной (применится после перезагрузки)'
+      }
+    });
+
+    hookMain();
     addMenu();
   }
 
